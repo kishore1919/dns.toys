@@ -4,3 +4,12 @@ wordnet
 cities15000.txt
 *.snapshot
 ifsc
+.DS_Store
+*.swp
+*.swo
+*.bak
+*.tmp
+*.log
+*.pid
+*.out
+*.err

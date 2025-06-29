@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/knadh/dns.toys/internal/services/uuid"
 	"github.com/knadh/dns.toys/internal/services/vitamin"
 	"github.com/knadh/dns.toys/internal/services/weather"
+	"github.com/knadh/dns.toys/internal/services/calculator"
 	"github.com/knadh/koanf"
 	"github.com/knadh/koanf/parsers/toml"
 	"github.com/knadh/koanf/providers/file"
@@ -378,6 +380,14 @@ func main() {
 		help = append(help, []string{"get the common name, scientific name, and food sources for a vitamin", "dig b12.vitamin @%s"})
 	}
 
+	// Calculator service
+	if ko.Bool("calculator.enabled") {
+		help = append(help, []string{
+			"evaluate a simple arithmetic expression",
+			"dig 2*3+1.calc @%s",
+		})
+	}
+
 	// Prepare the static help response for the `help` query.
 	for _, l := range help {
 		r, err := dns.NewRR(fmt.Sprintf("help. %d TXT \"%s\" \"%s\"", HELP_TTL, l[0], fmt.Sprintf(l[1], h.domain)))
@@ -389,7 +399,35 @@ func main() {
 	}
 
 	mux.HandleFunc("help.", h.handleHelp)
-	mux.HandleFunc(".", (h.handleDefault))
+
+	// The root handler is special. If the calculator is enabled, it acts as a
+	// wrapper that handles .calc queries and forwards the rest to the default handler.
+	if ko.Bool("calculator.enabled") {
+		mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+			q := r.Question[0].Name
+			if strings.HasSuffix(q, ".calc.") {
+				expr := q[:len(q)-len(".calc.")]
+				expr = strings.TrimSuffix(expr, ".")
+				result, err := calculator.Evaluate(expr)
+				txt := ""
+				if err != nil {
+					txt = err.Error()
+				} else {
+					txt = fmt.Sprintf("%v", result)
+				}
+				rr, _ := dns.NewRR(fmt.Sprintf("%s %d TXT \"%s\"", q, HELP_TTL, txt))
+				m := new(dns.Msg)
+				m.SetReply(r)
+				m.Answer = []dns.RR{rr}
+				w.WriteMsg(m)
+				return
+			}
+			// Fallback to default handler for all other queries.
+			h.handleDefault(w, r)
+		})
+	} else {
+		mux.HandleFunc(".", h.handleDefault)
+	}
 
 	// Start the snapshot listener.
 	go saveSnapshot(h)
